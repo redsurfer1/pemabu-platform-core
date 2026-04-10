@@ -9,7 +9,7 @@ import {
   getTrustRolePermissions,
 } from '@/src/lib/auth-context';
 
-/** Client-local trust tier (no @prisma/client). */
+/** Client-local trust tier; keep in sync with DB enum without importing Prisma in this module. */
 type TrustRole = 'PUBLIC' | 'USER' | 'ADVISOR' | 'ADMIN';
 
 interface AuthContextType {

@@ -8,6 +8,17 @@ const VALID_ENTITY_VALUES = ['FLOMISMA_ADMIN', 'PEMABU_ADMIN', 'DUAL_ADMIN'];
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // Root: never run the app router page pipeline for `/` (avoids workUnitAsyncStorage errors in some sandboxes).
+  if (pathname === '/') {
+    const err = request.nextUrl.searchParams.get('error');
+    if (err) {
+      const denied = new URL('/access-denied', request.url);
+      denied.search = request.nextUrl.search;
+      return NextResponse.redirect(denied);
+    }
+    return NextResponse.redirect(new URL('/mfo', request.url));
+  }
+
   // Governance: /api/admin/* requires X-Admin-Entity-Context (Sovereign Command Center / V4.1)
   if (pathname.startsWith('/api/admin/')) {
     const value = request.headers.get(ADMIN_ENTITY_HEADER);
@@ -27,7 +38,7 @@ export function middleware(request: NextRequest) {
     const authCookie = request.cookies.get('pemabu_auth_user');
 
     if (!authCookie) {
-      const loginUrl = new URL('/', request.url);
+      const loginUrl = new URL('/access-denied', request.url);
       loginUrl.searchParams.set('error', 'authentication_required');
       loginUrl.searchParams.set('redirect', pathname);
       return NextResponse.redirect(loginUrl);
@@ -39,12 +50,12 @@ export function middleware(request: NextRequest) {
 
       const allowed: TrustRole[] = ['ADVISOR', 'USER', 'ADMIN'];
       if (!trustRole || !allowed.includes(trustRole)) {
-        const accessDeniedUrl = new URL('/', request.url);
+        const accessDeniedUrl = new URL('/access-denied', request.url);
         accessDeniedUrl.searchParams.set('error', 'access_denied');
         return NextResponse.redirect(accessDeniedUrl);
       }
     } catch (error) {
-      const loginUrl = new URL('/', request.url);
+      const loginUrl = new URL('/access-denied', request.url);
       loginUrl.searchParams.set('error', 'invalid_session');
       return NextResponse.redirect(loginUrl);
     }
@@ -54,5 +65,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/api/admin/:path*', '/compliance-review/:path*', '/trust-center/:path*'],
+  matcher: ['/', '/api/admin/:path*', '/compliance-review/:path*', '/trust-center/:path*'],
 };
