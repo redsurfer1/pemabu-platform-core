@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pemabu Platform - System Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+        .test-header {
+            background: #000;
+            color: #0f0;
+            padding: 20px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 20px;
+        }
+        .status-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .status-ok {
+            color: #10b981;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-header">✓ System Active - Pemabu Platform</div>
+    <div class="container">
+        <div class="status-card">
+            <h1>Static HTML Test Page</h1>
+            <p class="status-ok">✓ HTML rendering: OK</p>
+            <p class="status-ok">✓ CSS injection: OK</p>
+            <p class="status-ok">✓ Server response: OK</p>
+        </div>
+        <div class="status-card">
+            <h2>Diagnostic Information</h2>
+            <p><strong>Issue:</strong> Next.js 16 Turbopack filesystem resource contention</p>
+            <p><strong>Error:</strong> EAGAIN (Resource temporarily unavailable os error 11)</p>
+            <p><strong>Root Cause:</strong> Turbopack file watcher conflicts in containerized environment</p>
+        </div>
+        <div class="status-card">
+            <h2>Next Steps</h2>
+            <ol>
+                <li>This static page confirms server is responding correctly</li>
+                <li>Browser console (F12) should show no errors</li>
+                <li>Next.js build requires runtime environment adjustments</li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>

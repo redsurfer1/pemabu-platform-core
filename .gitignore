@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets (never commit)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Build and output
+dist/
+build/
+out/
+.next/
+*.tsbuildinfo
+
+# Windows reserved / junk
+nul
+NUL
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs and debug
+*.log
+npm-debug.log*
+.npm
+
+# Local database files (exclude from backup/push)
+*.db
+*.sqlite
+*.sqlite3
+
+# Local spreadsheets (MFO / portfolio workbooks — do not publish)
+*.xlsx
+*.xls
+*.xlsm
+
+# Test and coverage
+coverage/
+.nyc_output/
+
+# Prisma (keep schema and migrations; ignore generated and cache)
+# node_modules/.prisma is under node_modules

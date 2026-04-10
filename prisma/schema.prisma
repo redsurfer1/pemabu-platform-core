@@ -1,0 +1,742 @@
+// LEGAL REVIEW REQUIRED — Pemabu — Brief 7 in FLOMISMA_PLATFORM/docs/legal-review-briefs.md
+// Question: Do LedgerEntry and related monetary fields imply Pemabu maintains customer money accounts vs provider-mirrored reporting?
+// Do not remove until counsel clearance is recorded in legal-review-briefs.md under "Counsel Response."
+
+// PEMABU Platform – Unified Identity, Flomisma Settlement, H2AI/AI2AI
+// Multi-tenant with Row-Level Security (tenant_id scoping)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Multi-Tenancy (RLS scope) ─────────────────────────────────────────────
+// V4.1 Fed-Style Overnight Balance Cap (Kraken Skinny Master Account)
+model Tenant {
+  id                   String                @id @default(uuid())
+  name                 String
+  /// @deprecated Sprint 4 clean model — monetary snapshot fields; migration Sprint 5. Not authoritative for funds.
+  overnightCap         Decimal               @default(1000) @db.Decimal(20, 8) // Max credits on ledger overnight (USD)
+  /// @deprecated Sprint 4 clean model — monetary snapshot fields; migration Sprint 5. Not authoritative for funds.
+  currentBalanceEOD    Decimal               @default(0) @db.Decimal(20, 8) // Snapshot at 5 PM EST lock
+  createdAt            DateTime              @default(now())
+  users                User[]
+  contracts            Contract[]
+  ledgerEntries        LedgerEntry[]
+  governanceThresholds GovernanceThreshold[]
+  approvalQueues       ApprovalQueue[]
+  partnerBrandings     PartnerBranding[]
+  sandboxRuns          SandboxRun[]
+  stakingPositions     StakingPosition[]
+  stakingPool          StakingPool?
+  agents               Agent[]
+  assetVaults          AssetVault[]
+  projects             TreasuryTask[]
+  spendingAllowances   SpendingAllowance[]
+  gigCategories        GigCategory[]
+}
+
+// ─── Programmable Vaults (Deep Agent) ─────────────────────────────────────
+// Check agent spending allowance before any PMB/credit transfer.
+model SpendingAllowance {
+  id            String   @id @default(uuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agentId       String // Agent.id or tenant-scoped agent identifier
+  amountLimit   Decimal  @db.Decimal(18, 6)
+  period        String   @default("DAILY") // DAILY | WEEKLY | MONTHLY
+  usedInPeriod  Decimal  @default(0) @db.Decimal(18, 6)
+  periodStartAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([tenantId, agentId])
+  @@index([tenantId])
+  @@index([agentId])
+}
+
+// ─── Single-Purpose Vault (Temporal Firewall) ──────────────────────────────
+// Hyper-specialized vault for Spice Krewe culinary equipment leasing.
+model AssetVault {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assetName String // e.g. "Industrial Oven"
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  valuation Decimal  @db.Decimal(20, 8) // Asset value (USD)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  leaseRate Decimal  @db.Decimal(5, 4) // Lease rate as decimal (e.g. 0.05 = 5% of chef revenue)
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+// ─── Agent Equity (H2AI/AI2AI token & ownership) ─────────────────────────
+model Agent {
+  id                    String             @id @default(uuid())
+  tenantId              String
+  tenant                Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId                String?            @unique // Optional link to User (AI_AGENT)
+  tokenSymbol           String // e.g. "PAB", "AGENT-1"
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  totalSupply           Decimal            @default(0) @db.Decimal(20, 8)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  circulatingSupply     Decimal            @default(0) @db.Decimal(20, 8)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  currentPrice          Decimal?           @db.Decimal(20, 8) // Mark-to-market price per share
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  t30Revenue            Decimal?           @db.Decimal(20, 8) // Sum CREDIT last 30 days (USD)
+  lastValuationAt       DateTime? // Last time valuation was run
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  initialCollateralUsdc Decimal?           @db.Decimal(20, 8) // Floor price when T30 revenue = 0
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  valuationHistory      ValuationHistory[]
+
+  @@index([tenantId])
+  @@index([tokenSymbol])
+}
+
+// SOC2 Processing Integrity: track price changes over time
+model ValuationHistory {
+  id          String   @id @default(uuid())
+  agentId     String
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  price       Decimal  @db.Decimal(20, 8)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed. Do not write to this field in new code. Use provider_reference_id and provider_status for provider-sourced data.
+  t30Revenue  Decimal  @db.Decimal(20, 8)
+  valuationAt DateTime @default(now())
+
+  @@index([agentId])
+  @@index([valuationAt])
+}
+
+// ─── 1. Unified Identity & Economic Actors ─────────────────────────────────
+model User {
+  id              String    @id @default(uuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email           String
+  role            UserRole  @default(HUMAN) // HUMAN or AI_AGENT
+  trustRole       TrustRole @default(PUBLIC) // Trust Center access level
+  profileStatus   String // Syncs with Exam/Learn status; MANUAL_REVIEW when KYC < threshold
+  /// @deprecated Sprint 4 clean model — wallet/custody reference; not platform-managed funds. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  walletAddress   String?   @unique // Linked Flomisma Wallet
+  apiKeys         Json? // AI_AGENT: keys for initiating transactions (encrypted at app layer)
+  location        String? // ISO country/region for TaxService withholding
+  reputationScore Decimal?  @db.Decimal(10, 4) // ERC-8004 compliant; 0–1 scale
+
+  /// Stripe Express connected account ID for this seller (opaque reference only).
+  stripeConnectAccountId String? @map("stripe_connect_account_id")
+  /// True when Stripe reports onboarding details submitted (see account.updated webhook).
+  stripeConnectOnboardingComplete Boolean @default(false) @map("stripe_connect_onboarding_complete")
+  /// Mirrors Stripe Account.payouts_enabled (updated via webhooks).
+  stripeConnectPayoutsEnabled Boolean @default(false) @map("stripe_connect_payouts_enabled")
+  foundingProvider Boolean @default(false) @map("founding_provider")
+
+  // Relations
+  contractsAsEmployer    Contract[]              @relation("ContractEmployer")
+  contractsAsEmployee    Contract[]              @relation("ContractEmployee")
+  certifications         Certification[]
+  mentorships            Mentorship[]
+  ledgerEntries          LedgerEntry[]
+  learnToEarnSuggestions LearnToEarnSuggestion[]
+  agentEquity            AgentEquity?
+  stakingPositions       StakingPosition[]
+  projectsLed            TreasuryTask[]          @relation("ProjectLead")
+  inviteToBids           InviteToBid[]
+  bids                   AgenticTender[]
+
+  // Unique per tenant
+  @@unique([tenantId, email])
+}
+
+enum UserRole {
+  HUMAN
+  AI_AGENT // H2AI and AI2AI readiness
+}
+
+enum TrustRole {
+  PUBLIC // No Trust Center access
+  USER // Full Trust Center visibility; limited controls (replaces LLC_MEMBER)
+  ADVISOR // Read-only Trust Center access (replaces AUDITOR)
+  ADMIN // Full Trust Center + control access
+}
+
+// ─── 2. Flomisma Settlement Layer ─────────────────────────────────────────
+// Every financial event (exam, mentor, hire) creates a LedgerEntry → flomismaTxId
+model LedgerEntry {
+  id           String      @id @default(uuid())
+  tenantId     String
+  tenant       Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// @deprecated Sprint 4 clean model — platform must not treat as authoritative monetary ledger; migration Sprint 5.
+  amount       Decimal     @db.Decimal(20, 8)
+  /// @deprecated Sprint 4 clean model — provider-sourced reporting only after Sprint 5.
+  currency     String      @default("USD") // or Crypto symbol
+  type         EntryType // DEBIT, CREDIT, ESCROW_HOLD
+  status       EntryStatus @default(PENDING)
+  /// @deprecated Sprint 4 clean model — correlation ID only; not platform-initiated settlement authority.
+  flomismaTxId String      @unique // External Flomisma ID
+  metadata     Json? // "Proof of Work", Task ID, etc.
+  createdAt    DateTime    @default(now())
+}
+
+enum EntryType {
+  PAY_EXAM
+  PAY_MENTOR
+  HIRE_ESCROW
+  AGENT_SUB_TASK
+  REFUND // Insert-only: new entry references original flomismaTxId in metadata
+  TAX_WITHHOLDING // Intelligent Tax Agent (ITC)
+  EQUIPMENT_LEASE // Single-purpose vault: lease payment into AssetVault (Spice Krewe)
+}
+
+enum EntryStatus {
+  PENDING
+  SETTLED
+  DISPUTED
+  REFUNDED
+  FAILED_RETRY // Flomisma API down; manual/automated reconciliation
+  PENDING_RECONCILIATION // ACH/settlement failure; Recovery_ERP moves here for manual resolution
+}
+
+// ─── V4.1 Sovereign liquidity (March 2026 Fed Skinny) ───────────────────────
+// USDC reserve ledger: total USDC = sum(amount). Used for dynamic overnight cap.
+model ReserveLedgerEntry {
+  id        String   @id @default(uuid())
+  /// @deprecated Sprint 4 clean model — reserve semantics delegated to licensed provider; migration Sprint 5.
+  amount    Decimal  @db.Decimal(20, 8) // Positive = deposit, negative = withdrawal
+  currency  String   @default("USDC")
+  type      String // e.g. DEPOSIT, WITHDRAWAL, ADJUSTMENT
+  reference String? // External ref (e.g. Flomisma sweep id)
+  createdAt DateTime @default(now())
+  metadata  Json?
+
+  @@index([currency])
+  @@index([createdAt])
+}
+
+// ─── Idempotency & audit (Task 3) ──────────────────────────────────────────
+model SettlementIdempotency {
+  id             String            @id @default(uuid())
+  tenantId       String
+  idempotencyKey String // hash(contractId + proofHash)
+  contractId     String
+  proofHash      String
+  status         IdempotencyStatus
+  createdAt      DateTime          @default(now())
+
+  @@index([tenantId, idempotencyKey, createdAt])
+}
+
+enum IdempotencyStatus {
+  SUCCESS
+  DUPLICATE_ATTEMPT
+}
+
+// ─── 3. Task & Transactional Context (H2AI / AI2AI) ────────────────────────
+// employeeId can be Human or AI Agent; agenticProof for automated settlement
+model Contract {
+  id           String         @id @default(uuid())
+  tenantId     String
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employerId   String
+  employeeId   String
+  employer     User           @relation("ContractEmployer", fields: [employerId], references: [id], onDelete: Cascade)
+  employee     User           @relation("ContractEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  status       ContractStatus
+  /// @deprecated Sprint 4 clean model — display/provider mirror only; not platform-held escrow. Migration Sprint 5.
+  escrowAmount Decimal        @db.Decimal(20, 8)
+  agenticProof String? // Hash of AI output/logic for Flomisma verification (AI2AI)
+  /// Provider-sourced hold / intent reference (mirror only).
+  provider_reference_id String?
+  /// Normalized provider lifecycle label (mirror only).
+  provider_status       String?
+  // SPRINT 5 — STRIPE PROVIDER FIELDS
+  // These fields mirror Stripe state only. They are read-only from the platform perspective
+  // after being set by webhook receipt. Platform never computes or controls these values.
+  stripe_payment_intent_id  String? @map("stripe_payment_intent_id")
+  stripe_connect_account_id String? @map("stripe_connect_account_id")
+  /// Last provider status mirror update (non-authoritative timestamp).
+  provider_last_updated DateTime? @map("provider_last_updated")
+  milestones   Milestone[]
+}
+
+model Milestone {
+  id          String    @id @default(uuid())
+  contractId  String
+  contract    Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  title       String
+  /// @deprecated Sprint 4 clean model — not authoritative payment amount; migration Sprint 5.
+  amount      Decimal   @db.Decimal(20, 8)
+  isVerified  Boolean   @default(false) // Exam or Human Review
+  releaseDate DateTime?
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  DISPUTED
+  CANCELLED
+  FAILED // Skill-gap: triggers LearnToEarn suggestion
+}
+
+// ─── Governance Hub & HITL (Task 1) ────────────────────────────────────────
+model GovernanceThreshold {
+  id                        String   @id @default(uuid())
+  tenantId                  String?
+  tenant                    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// @deprecated Sprint 4 clean model — monetary/settlement threshold. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  autoSettlementLimitUsd    Decimal  @default(500) @db.Decimal(12, 2) // Speed limit: auto-settle below this
+  autoBrandingApproval      Boolean  @default(false) // true = auto-approve branding below threshold
+  kycConfidenceMinPct       Int      @default(95) // Below this → MANUAL_REVIEW
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  treasuryDiscrepancyMaxPct Decimal  @default(3) @db.Decimal(5, 2) // Pause sweep if discrepancy > this
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  driftVarianceMax          Decimal? @db.Decimal(10, 6) // SOC2 fairness: max allowed variance for Matches
+  updatedAt                 DateTime @updatedAt
+
+  @@unique([tenantId])
+}
+
+model ApprovalQueue {
+  id         String             @id @default(uuid())
+  tenantId   String
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actionType ApprovalActionType
+  payload    Json // e.g. { contractId, amount, agenticProof }
+  status     ApprovalStatus     @default(PENDING_APPROVAL)
+  createdAt  DateTime           @default(now())
+  approvedBy String?
+  approvedAt DateTime?
+  metadata   Json?
+}
+
+enum ApprovalActionType {
+  SETTLEMENT_OVER_THRESHOLD
+  BRANDING_APPROVAL
+  KYC_OVERRIDE
+  TREASURY_SWEEP
+  SANDBOX_VIOLATION // Restricted domain access; agent flagged for manual review
+  OTHER
+}
+
+enum ApprovalStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+// ─── Autonomous Operations: Branding (Task 2) ───────────────────────────────
+model PartnerBranding {
+  id          String         @id @default(uuid())
+  tenantId    String
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uiConfig    Json // metadata-driven UI (logo, colors, copy)
+  status      BrandingStatus @default(PENDING_APPROVAL)
+  suggestedAt DateTime       @default(now())
+  approvedBy  String?
+  approvedAt  DateTime?
+}
+
+enum BrandingStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+// ─── Skill-Gap Loop (Task 3) ───────────────────────────────────────────────
+model LearnToEarnSuggestion {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contractId     String?
+  suggestionType String // e.g. "EXAM", "MENTOR_SESSION"
+  metadata       Json?
+  createdAt      DateTime @default(now())
+}
+
+// ─── SOC2 Audit Evidence Collection ─────────────────────────────────────────
+model AuditEvidence {
+  id           String    @id @default(uuid())
+  eventType    String // CIRCUIT_BREAKER, DRIFT_DETECTED, REBALANCE, etc.
+  snapshotData Json // Contains ratio, ledger entries, agent count, etc.
+  triggeredAt  DateTime  @default(now())
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  systemState  String // OPTIMAL, DEGRADED, HALTED, INTEGRITY_DRIFT
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  reserveRatio Decimal?  @db.Decimal(10, 6)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  ledgerSum    Decimal?  @db.Decimal(36, 18)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  reserveSum   Decimal?  @db.Decimal(36, 18)
+  metadata     Json? // Additional context
+}
+
+// ─── Execution Sandbox (OpenAI-style) ───────────────────────────────────────
+model SandboxRun {
+  id                       String           @id @default(uuid())
+  tenantId                 String
+  tenant                   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId                   String // Agent (employee) executing the job
+  contractId               String?
+  jobId                    String?
+  skillType                String // e.g. "WEB_CRAWL", "CODE_GEN"
+  resultHash               String? // Signed hash of result (HMAC or sign)
+  resultHashAlg            String?          @default("sha256")
+  logs                     String?          @db.Text
+  status                   SandboxRunStatus @default(RUNNING)
+  violatedRestrictedDomain String? // If set, triggered self-destruct + HITL
+  createdAt                DateTime         @default(now())
+  finishedAt               DateTime?
+}
+
+enum SandboxRunStatus {
+  RUNNING
+  SUCCESS
+  SELF_DESTRUCT
+  FAILED
+}
+
+// ─── Credit / Fair Lending (Model Card, Reason Code per decision) ─────────────
+/// @deprecated Sprint 4 clean model — legacy naming; platform access-tier records only. Evaluate for removal in Sprint 5.
+model CreditDecision {
+  id                     String   @id @default(uuid())
+  applicationId          String   @unique
+  approved               Boolean
+  reasonCode             String // Model Card: human-readable reason (e.g. INCOME_THRESHOLD_MET)
+  /// @deprecated Sprint 4 clean model — monetary-profile surrogate. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  financialProfileHash   String? // Hash of financial inputs used (no PII)
+  protectedClassMetadata Json? // Simulated protected class for bias testing only; not used in decision
+  createdAt              DateTime @default(now())
+
+  @@index([approved])
+  @@index([createdAt])
+}
+
+// ─── Drift Monitor / SOC2 (Task 3) ──────────────────────────────────────────
+model ComplianceAuditLog {
+  id        String   @id @default(uuid())
+  tenantId  String?
+  eventType String // e.g. "MATCH_DISTRIBUTION", "DRIFT_ALERT"
+  payload   Json // statistical distribution, variance
+  /// @deprecated Sprint 4 clean model — monetary/statistical field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  variance  Decimal? @db.Decimal(10, 6)
+  alerted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+// ─── Supporting models (User relations) ─────────────────────────────────────
+model Certification {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseType  String? // e.g. "PLANETARY_RESILIENCE", "AGTECH" (Learn platform)
+  courseName  String? // Display: "Planetary Resilience", "AgTech"
+  score       Decimal?  @db.Decimal(5, 2) // Skill score 0–100
+  completedAt DateTime? @default(now())
+  metadata    Json?
+
+  @@index([userId])
+  @@index([courseType])
+}
+
+// ─── Hire ecosystem: open projects (Talent Hunt matching) ───────────────────
+// Search foundation (Sprint 1): FTS column + category M2M + optional 1:1 location.
+// Manual SQL: prisma/migrations/manual/001_search_foundation.sql (trigger + GIN index).
+model TreasuryTask {
+  id            String                   @id @default(uuid())
+  tenantId      String
+  tenant        Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title         String
+  description   String                   @db.Text
+  skills        String[] // Required skills for vector/semantic match
+  status        TreasuryTaskStatus       @default(OPEN)
+  projectLeadId String
+  projectLead   User                     @relation("ProjectLead", fields: [projectLeadId], references: [id], onDelete: Cascade)
+  promotedAt    DateTime? // Job Promotion Protocol: when pushed to agent channel (Applme)
+  deadlineDays  Int                      @default(75) // Planetary Resilience / APPLME: 75-day project clock
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  /// Postgres tsvector for title+description (maintained by trigger in manual SQL).
+  searchVector  Unsupported("tsvector")? @map("search_vector")
+  inviteToBids  InviteToBid[]
+  bids          AgenticTender[]
+  categories    TreasuryTaskCategory[]
+  location      GigLocation?
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([promotedAt])
+}
+
+/// Hierarchical gig/project category (tenant-scoped). Slugs unique per tenant.
+model GigCategory {
+  id        String                 @id @default(cuid())
+  tenantId  String
+  tenant    Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  slug      String
+  parentId  String?
+  parent    GigCategory?           @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  GigCategory[]          @relation("CategoryTree")
+  createdAt DateTime               @default(now())
+  tasks     TreasuryTaskCategory[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, parentId])
+}
+
+model TreasuryTaskCategory {
+  treasuryTaskId String
+  categoryId     String
+  treasuryTask   TreasuryTask @relation(fields: [treasuryTaskId], references: [id], onDelete: Cascade)
+  category       GigCategory  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([treasuryTaskId, categoryId])
+  @@index([categoryId])
+}
+
+/// Optional structured location + remote flag per open project (1:1 with TreasuryTask).
+model GigLocation {
+  id             String       @id @default(cuid())
+  treasuryTaskId String       @unique
+  treasuryTask   TreasuryTask @relation(fields: [treasuryTaskId], references: [id], onDelete: Cascade)
+  city           String?
+  state          String?
+  country        String       @default("US")
+  lat            Float?
+  lng            Float?
+  remoteOk       Boolean      @default(false)
+  citySlug       String?      @map("city_slug")
+
+  @@index([citySlug])
+}
+
+enum TreasuryTaskStatus {
+  OPEN
+  CLOSED
+  FILLED
+}
+
+model InviteToBid {
+  id             String       @id @default(uuid())
+  treasuryTaskId String
+  treasuryTask   TreasuryTask @relation(fields: [treasuryTaskId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status         InviteStatus @default(PENDING)
+  sentAt         DateTime     @default(now())
+  metadata       Json? // source: certification-issued webhook, courseType, matchScore
+
+  @@unique([treasuryTaskId, userId])
+  @@index([userId])
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+// ─── APPLME-style bidding (amount, message); ranking & selection → PemabuSelectionService
+model AgenticTender {
+  id             String              @id @default(uuid())
+  treasuryTaskId String
+  treasuryTask   TreasuryTask        @relation(fields: [treasuryTaskId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  amount         Decimal?            @db.Decimal(18, 6) // Optional bid amount (USD)
+  message        String?             @db.Text // Cover note / proposal
+  status         AgenticTenderStatus @default(PENDING)
+  createdAt      DateTime            @default(now())
+
+  @@unique([treasuryTaskId, userId])
+  @@index([treasuryTaskId])
+  @@index([userId])
+  @@index([status])
+}
+
+enum AgenticTenderStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model Mentorship {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Extend with mentor/booking fields as needed
+}
+
+// ─── Learn: Dynamic Syllabus (Market-Syllabus Bridge) ────────────────────────
+model Course {
+  id          String   @id @default(uuid())
+  slug        String   @unique // e.g. TRADE_FINANCE_COMPLIANCE, PLANETARY_RESILIENCE
+  title       String
+  description String?  @db.Text
+  weight      Decimal  @default(1) @db.Decimal(5, 2) // Recommendation engine weight (AI-adjustable)
+  isTrending  Boolean  @default(false) // Surge from Flomisma → top of feed
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([slug])
+  @@index([isTrending])
+}
+
+// ─── Agent Equity (Virtuals.io model) ──────────────────────────────────────
+// Enables fractional ownership of AI agents for Economic OS participants
+/// @deprecated Sprint 4 clean model — entire model is monetary-authority. Evaluate for removal in Sprint 5. Do not add new relations or fields to this model.
+model AgentEquity {
+  id                String    @id @default(uuid())
+  userId            String    @unique // One equity model per AI agent
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  totalSupply       Decimal   @default(1000000) @db.Decimal(20, 8) // Total tokens issued
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  circulatingSupply Decimal   @default(0) @db.Decimal(20, 8) // Currently in circulation
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  dividendYield     Decimal   @default(0) @db.Decimal(10, 6) // Annual yield percentage (0–100)
+  tokenSymbol       String? // e.g., "AGENT-001"
+  lastDividendDate  DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+// ─── Staking & Buffer Liquidity ────────────────────────────────────────────
+// Users stake USDC to provide liquidity for emergency recovery
+/// @deprecated Sprint 4 clean model — entire model is monetary-authority. Evaluate for removal in Sprint 5. Do not add new relations or fields to this model.
+model StakingPosition {
+  id       String @id @default(uuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  stakedAmount   Decimal @default(0) @db.Decimal(36, 18) // USDC staked
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  rewardsClaimed Decimal @default(0) @db.Decimal(36, 18) // Total rewards claimed
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  rewardsAccrued Decimal @default(0) @db.Decimal(36, 18) // Pending rewards
+
+  stakedAt           DateTime  @default(now())
+  lastRewardAt       DateTime  @default(now())
+  unstakeRequestedAt DateTime? // When user requested unstake
+  unstakeAvailableAt DateTime? // When unstake cooldown completes
+
+  status StakingStatus @default(ACTIVE)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum StakingStatus {
+  ACTIVE // Actively earning rewards
+  COOLDOWN // 7-day cooldown period active
+  UNSTAKED // Fully withdrawn
+}
+
+// Global staking pool metrics
+/// @deprecated Sprint 4 clean model — entire model is monetary-authority. Evaluate for removal in Sprint 5. Do not add new relations or fields to this model.
+model StakingPool {
+  id       String @id @default(uuid())
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  totalValueLocked        Decimal @default(0) @db.Decimal(36, 18) // Total USDC staked
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  totalRewardsDistributed Decimal @default(0) @db.Decimal(36, 18)
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  rewardPoolBalance       Decimal @default(0) @db.Decimal(36, 18) // Undistributed rewards
+
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  currentAPY       Decimal @default(0) @db.Decimal(10, 6) // Current annual APY
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  last30DayRevenue Decimal @default(0) @db.Decimal(36, 18) // For APY calculation
+
+  /// @deprecated Sprint 4 clean model — monetary field. Remove in Sprint 5 migration after licensed provider integration is confirmed.
+  rewardDiversionRate Decimal @default(0.10) @db.Decimal(5, 4) // 10% of agent revenue
+  cooldownPeriodDays  Int     @default(7)
+
+  lastRewardDistribution DateTime @default(now())
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+// ─── Notifications (cross-tenant log; use system Prisma client) ─────────────
+model NotificationLog {
+  id         String   @id @default(cuid())
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  type       String
+  recipient  String
+  sentAt     DateTime @default(now()) @map("sent_at")
+  metadata   Json?
+
+  @@index([entityType, entityId, type])
+}
+
+// ─── Spice Krewe — city registry (Rank 9; seeded via manual SQL) ───────────
+model SpiceKreweCity {
+  id           String    @id @default(cuid())
+  slug         String    @unique
+  displayName  String    @map("display_name")
+  stateCode    String    @map("state_code")
+  isLive       Boolean   @default(false) @map("is_live")
+  launchedAt   DateTime? @map("launched_at")
+  heroImageUrl String?   @map("hero_image_url")
+  tagline      String?
+  createdAt    DateTime  @default(now())
+}
+
+// ─── Spice Krewe — event concierge (Rank 1) ──────────────────────────────────
+model ConciergeBrief {
+  id                      String             @id @default(cuid())
+  tenantId                String             @map("tenant_id")
+  citySlug                String             @map("city_slug")
+  buyerId                 String             @map("buyer_id")
+  eventType               String             @map("event_type")
+  guestCount              Int                @map("guest_count")
+  theme                   String?
+  budgetCents             Int                @map("budget_cents")
+  eventDate               DateTime?          @map("event_date")
+  locationNotes           String?            @map("location_notes")
+  status                  String             @default("pending")
+  conciergeFeeCharged     Boolean            @default(false) @map("concierge_fee_charged")
+  estimatedTotalCents     Int?               @map("estimated_total_cents")
+  requiresHumanReview     Boolean            @default(false) @map("requires_human_review")
+  humanReviewedAt         DateTime?          @map("human_reviewed_at")
+  aiPackageJson           Json?              @map("ai_package_json")
+  stripePaymentIntentId   String?            @map("stripe_payment_intent_id")
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  packages                ConciergePackage[]
+
+  @@index([tenantId, citySlug, status])
+}
+
+model ConciergePackage {
+  id          String         @id @default(cuid())
+  briefId     String         @map("brief_id")
+  brief       ConciergeBrief @relation(fields: [briefId], references: [id], onDelete: Cascade)
+  packageJson Json           @map("package_json")
+  status      String         @default("draft")
+  acceptedAt  DateTime?      @map("accepted_at")
+  createdAt   DateTime       @default(now())
+
+  @@index([briefId])
+}

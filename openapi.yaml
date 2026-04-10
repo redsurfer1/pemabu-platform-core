@@ -1,0 +1,528 @@
+# LEGAL REVIEW REQUIRED — Pemabu — Brief 7 in FLOMISMA_PLATFORM/docs/legal-review-briefs.md
+# Question: Do public API descriptions of settlement/ledger imply Pemabu is a payments processor or holds funds?
+# Do not publish externally until counsel clears and records response in legal-review-briefs.md.
+openapi: 3.1.0
+info:
+  title: PEMABU Platform API
+  description: |
+    Unified identity, Flomisma settlement, and H2AI/AI2AI contract APIs.
+    AI agents can use this spec to discover endpoints and submit tasks for settlement.
+  version: 1.0.0
+  contact:
+    name: PEMABU Platform
+
+servers:
+  - url: https://api.pemabu.example.com/v1
+    description: Production
+  - url: http://localhost:3000/v1
+    description: Local
+
+tags:
+  - name: Identity
+    description: Users and tenant identity (H2AI/AI2AI actors)
+  - name: Contracts
+    description: H2AI/AI2AI contracts and settlement
+  - name: Ledger
+    description: Flomisma settlement ledger (insert-only audit trail)
+  - name: Tenants
+    description: Multi-tenant isolation
+  - name: Governance
+    description: Autonomous governance hub; HITL approval queue and speed limits
+  - name: Reputation
+    description: ERC-8004 compliant reputation scoring
+
+paths:
+  /users/me:
+    get:
+      tags: [Identity]
+      summary: Current user (from Bearer token)
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { description: Unauthorized }
+
+  /users:
+    get:
+      tags: [Identity]
+      summary: List users (tenant-scoped)
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      parameters:
+        - name: role
+          in: query
+          schema: { $ref: "#/components/schemas/UserRole" }
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/User" } }
+
+  /contracts:
+    get:
+      tags: [Contracts]
+      summary: List contracts (tenant-scoped)
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ContractStatus" }
+      responses:
+        "200":
+          description: List of contracts
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Contract" } }
+    post:
+      tags: [Contracts]
+      summary: Create contract (H2AI or AI2AI)
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContractCreate" }
+      responses:
+        "201":
+          description: Contract created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contract" }
+        "400": { description: Bad request }
+
+  /contracts/{contractId}:
+    get:
+      tags: [Contracts]
+      summary: Get contract by ID
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ContractId"
+      responses:
+        "200":
+          description: Contract
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contract" }
+        "404": { description: Not found }
+
+  /contracts/settle:
+    post:
+      tags: [Contracts]
+      summary: Settle contract (release escrow) after agentic proof verification
+      description: |
+        **AI2AI / H2AI settlement.** Call this after the VerificationService confirms
+        that the submitted `agenticProof` matches the contract's requirements. Flomisma
+        releases escrow and ledger entries are created (insert-only).
+
+        **agenticProof requirement:** SHA-256 hash of the AI's execution output, or a
+        signed execution log (e.g. JWS) that can be verified by the platform. Used for
+        automated Flomisma settlement and SOC2 audit.
+      operationId: settleContract
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contractId, agenticProof]
+              properties:
+                contractId:
+                  type: string
+                  format: uuid
+                  description: Contract to settle
+                agenticProof:
+                  type: string
+                  description: |
+                    SHA-256 hash (hex) of the AI agent's output/logic, or a signed
+                    execution log (e.g. JWS) for AI2AI verification. Must match the
+                    value verified by the VerificationService before escrow release.
+                  example: "a1b2c3d4e5f6..."
+                  minLength: 64
+                  maxLength: 4096
+                notes:
+                  type: string
+                  description: Optional settlement notes for audit
+      responses:
+        "200":
+          description: Contract settled; escrow released and ledger entries created (or idempotent duplicate)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StandardSettlementResponse" }
+        "400":
+          description: Invalid proof, contract not in ACTIVE state, or missing tenant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StandardSettlementResponse" }
+        "401":
+          description: Unauthorized – missing or invalid Bearer token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StandardSettlementResponse" }
+              example:
+                success: false
+                transactionId: null
+                status: COMPLETED
+                timestamp: "2025-03-11T12:00:00.000Z"
+                error: "Missing or invalid Authorization header"
+        "403":
+          description: Forbidden – valid JWT but tenant_id (or org_id) claim missing; prevents cross-tenant leakage
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StandardSettlementResponse" }
+              example:
+                success: false
+                transactionId: null
+                status: COMPLETED
+                timestamp: "2025-03-11T12:00:00.000Z"
+                error: "Forbidden: tenant_id claim required to prevent cross-tenant access"
+        "404":
+          description: Contract not found (or RLS – contract belongs to another tenant)
+
+  /ledger/entries:
+    get:
+      tags: [Ledger]
+      summary: List ledger entries (tenant-scoped, read-only)
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      parameters:
+        - name: userId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: type
+          in: query
+          schema: { $ref: "#/components/schemas/EntryType" }
+      responses:
+        "200":
+          description: List of ledger entries (immutable audit trail)
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/LedgerEntry" } }
+    post:
+      tags: [Ledger]
+      summary: Create ledger entry (insert-only; no UPDATE/DELETE)
+      description: |
+        Creates a new ledger entry. Ledger is append-only for SOC2; refunds are
+        represented as new entries with type REFUND and original flomismaTxId in metadata.
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LedgerEntryCreate" }
+      responses:
+        "201":
+          description: Ledger entry created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LedgerEntry" }
+        "400": { description: Bad request }
+
+  /ledger/refund:
+    post:
+      tags: [Ledger]
+      summary: Create refund (new entry referencing original flomismaTxId)
+      description: |
+        Does not modify existing records. Creates a new LedgerEntry with type REFUND
+        and metadata.refundOfFlomismaTxId pointing to the original transaction.
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [originalFlomismaTxId, userId, amount, currency]
+              properties:
+                originalFlomismaTxId: { type: string }
+                userId: { type: string, format: uuid }
+                amount: { type: number }
+                currency: { type: string, default: "USD" }
+                reason: { type: string }
+      responses:
+        "201":
+          description: Refund entry created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LedgerEntry" }
+
+  /governance/queue:
+    get:
+      tags: [Governance]
+      summary: List HITL approval queue
+      description: |
+        Returns actions requiring human intervention (Human-in-the-Loop).
+        **HITL status codes:** PENDING_APPROVAL, APPROVED, REJECTED.
+      operationId: getGovernanceQueue
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ApprovalStatus" }
+      responses:
+        "200":
+          description: Approval queue items
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ApprovalQueueItem" } }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden – tenant_id required }
+
+  /governance/thresholds:
+    get:
+      tags: [Governance]
+      summary: Get governance speed limits and thresholds
+      description: Auto-settlement limit (default $500), KYC confidence (default 95%), treasury discrepancy max, drift variance (SOC2).
+      operationId: getGovernanceThresholds
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      responses:
+        "200":
+          description: Effective thresholds for the tenant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernanceThreshold" }
+        "401": { description: Unauthorized }
+    patch:
+      tags: [Governance]
+      summary: Update governance thresholds (admin)
+      operationId: updateGovernanceThresholds
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GovernanceThresholdUpdate" }
+      responses:
+        "200":
+          description: Thresholds updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernanceThreshold" }
+        "400": { description: Bad request }
+        "401": { description: Unauthorized }
+
+  /reputation/score:
+    get:
+      tags: [Reputation]
+      summary: Get reputation score (ERC-8004)
+      description: |
+        Returns User.reputationScore (0–1), weighted by successful agenticProof hashes
+        and settlement velocity. For Bolt.new: display trust indicator.
+      operationId: getReputationScore
+      security: [{ bearerAuth: [] }, { tenantHeader: [] }]
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Reputation score
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReputationScoreResponse" }
+        "401": { description: Unauthorized }
+        "404": { description: User not found }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT for user or AI_AGENT identity
+    tenantHeader:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant UUID; required for RLS. Must match authenticated tenant.
+
+  parameters:
+    ContractId:
+      name: contractId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  schemas:
+    StandardSettlementResponse:
+      type: object
+      description: Unified settlement/verification response for front-end and Bolt.new UI state
+      required: [success, transactionId, status, timestamp]
+      properties:
+        success:
+          type: boolean
+          description: Whether the operation succeeded (or was idempotent duplicate)
+        transactionId:
+          type: string
+          nullable: true
+          description: Flomisma transaction ID (e.g. flomisma_abc_123) or null if failed/duplicate
+        status:
+          type: string
+          enum: [SETTLED, FAILED_RETRY, COMPLETED]
+          description: |
+            SETTLED = escrow released (or idempotent duplicate).
+            FAILED_RETRY = Flomisma API down/unavailable; ledger entry created for manual or automated reconciliation; frontend should show "Settlement pending retry" and allow retry.
+            COMPLETED = generic/validation (e.g. contract not ACTIVE, invalid proof).
+        timestamp:
+          type: string
+          format: date-time
+          description: Server time of response
+        contractId:
+          type: string
+          format: uuid
+          description: Contract ID (optional, for reference)
+        error:
+          type: string
+          description: Error message when success is false
+        duplicate:
+          type: boolean
+          description: true when request was idempotent duplicate (same contractId+proofHash in 24h)
+
+    UserRole:
+      type: string
+      enum: [HUMAN, AI_AGENT]
+      description: |
+        HUMAN - human user. AI_AGENT - autonomous agent (H2AI/AI2AI); must have
+        walletAddress and apiKeys for initiating transactions.
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { $ref: "#/components/schemas/UserRole" }
+        profileStatus: { type: string }
+        walletAddress: { type: string, nullable: true }
+      readOnly: [id]
+
+    ContractStatus:
+      type: string
+      enum: [DRAFT, ACTIVE, COMPLETED, DISPUTED, CANCELLED, FAILED]
+      description: FAILED triggers LearnToEarn suggestion (skill-gap loop)
+
+    Contract:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        employerId: { type: string, format: uuid }
+        employeeId: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ContractStatus" }
+        escrowAmount: { type: number }
+        agenticProof: { type: string, nullable: true, description: "Set after verification for AI2AI" }
+        milestones: { type: array, items: { $ref: "#/components/schemas/Milestone" } }
+
+    ContractCreate:
+      type: object
+      required: [employerId, employeeId, escrowAmount]
+      properties:
+        employerId: { type: string, format: uuid }
+        employeeId: { type: string, format: uuid }
+        escrowAmount: { type: number }
+        milestones: { type: array, items: { $ref: "#/components/schemas/MilestoneCreate" } }
+
+    Milestone:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        amount: { type: number }
+        isVerified: { type: boolean }
+        releaseDate: { type: string, format: "date-time", nullable: true }
+
+    MilestoneCreate:
+      type: object
+      required: [title, amount]
+      properties:
+        title: { type: string }
+        amount: { type: number }
+
+    EntryType:
+      type: string
+      enum: [PAY_EXAM, PAY_MENTOR, HIRE_ESCROW, AGENT_SUB_TASK, REFUND, TAX_WITHHOLDING]
+      description: TAX_WITHHOLDING = Intelligent Tax Agent (ITC) per settlement
+
+    EntryStatus:
+      type: string
+      enum: [PENDING, SETTLED, DISPUTED, REFUNDED, FAILED_RETRY]
+
+    LedgerEntry:
+      type: object
+      readOnly: [id, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        amount: { type: number }
+        currency: { type: string }
+        type: { $ref: "#/components/schemas/EntryType" }
+        status: { $ref: "#/components/schemas/EntryStatus" }
+        flomismaTxId: { type: string }
+        metadata: { type: object, nullable: true }
+        createdAt: { type: string, format: "date-time" }
+
+    LedgerEntryCreate:
+      type: object
+      required: [userId, amount, currency, type, flomismaTxId]
+      properties:
+        userId: { type: string, format: uuid }
+        amount: { type: number }
+        currency: { type: string }
+        type: { $ref: "#/components/schemas/EntryType" }
+        flomismaTxId: { type: string }
+        metadata: { type: object }
+
+    ApprovalStatus:
+      type: string
+      enum: [PENDING_APPROVAL, APPROVED, REJECTED]
+      description: HITL status for autonomous actions
+
+    ApprovalActionType:
+      type: string
+      enum: [SETTLEMENT_OVER_THRESHOLD, BRANDING_APPROVAL, KYC_OVERRIDE, TREASURY_SWEEP, OTHER]
+
+    ApprovalQueueItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        actionType: { $ref: "#/components/schemas/ApprovalActionType" }
+        payload: { type: object }
+        status: { $ref: "#/components/schemas/ApprovalStatus" }
+        createdAt: { type: string, format: "date-time" }
+        approvedBy: { type: string, nullable: true }
+        approvedAt: { type: string, format: "date-time", nullable: true }
+
+    GovernanceThreshold:
+      type: object
+      description: Speed limits and HITL thresholds (Flomisma Standard)
+      properties:
+        autoSettlementLimitUsd: { type: number, description: "Auto-settle below this ($)" }
+        autoBrandingApproval: { type: boolean }
+        kycConfidenceMinPct: { type: integer, description: "Below this → MANUAL_REVIEW" }
+        treasuryDiscrepancyMaxPct: { type: number, description: "Pause sweep if exceeded" }
+        driftVarianceMax: { type: number, nullable: true, description: "SOC2 fairness cap" }
+
+    GovernanceThresholdUpdate:
+      type: object
+      properties:
+        autoSettlementLimitUsd: { type: number }
+        autoBrandingApproval: { type: boolean }
+        kycConfidenceMinPct: { type: integer }
+        treasuryDiscrepancyMaxPct: { type: number }
+        driftVarianceMax: { type: number, nullable: true }
+
+    ReputationScoreResponse:
+      type: object
+      required: [userId, score]
+      properties:
+        userId: { type: string, format: uuid }
+        score: { type: number, minimum: 0, maximum: 1, description: "ERC-8004 compliant" }
+
+    BrandingStatus:
+      type: string
+      enum: [PENDING_APPROVAL, APPROVED, REJECTED]
+      description: Partner branding HITL status
+
+security:
+  - bearerAuth: []
+  - tenantHeader: []
